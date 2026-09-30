@@ -2,7 +2,7 @@
 
 Ein n8n-Workflow, der zweimal pro Woche automatisch einen LinkedIn-Post im persönlichen Profil veröffentlicht – geschrieben von Claude auf Basis der neuesten Artikel aus einem WordPress-Blog, mit dem Beitragsbild des Artikels.
 
-Läuft produktiv seit September 2026 für [nikita-automation.de](https://nikita-automation.de).
+Läuft produktiv seit September 2026 für [nikita-automation.de](https://nikita-automation.de). Die Geschichte dahinter: [Wie ich meinen LinkedIn-Auftritt automatisiert habe](https://nikita-automation.de/2026/09/30/linkedin-auftritt-automatisiert/).
 
 *English summary: an n8n workflow that turns recent WordPress blog posts into native LinkedIn image posts (written in German by Claude) every Tuesday and Thursday. It talks to the LinkedIn Posts API directly because the built-in n8n LinkedIn node is pinned to a retired API version.*
 
