@@ -1,0 +1,528 @@
+{
+  "name": "LinkedIn: auto-post from blog (Tue/Thu 9:00)",
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin"
+  },
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "Schedule Tue/Thu 9:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 2,4"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "n2",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a0",
+              "name": "siteUrl",
+              "value": "https://nikita-automation.de",
+              "type": "string"
+            },
+            {
+              "id": "a1",
+              "name": "systemPrompt",
+              "value": "You write posts for the author's personal LinkedIn profile. The author is a business process automation specialist (n8n, APIs, AI tools) in Germany. Audience: owners of small and medium-sized businesses, recruiters and IT colleagues in Germany.\n\nTASK: from the articles below (taken from the author's blog), pick ONE that gives the most useful post with a practical takeaway for businesses. Pick pure alarm news (vulnerabilities, scandals) only if the others are even weaker. Then write a post about it.\n\nLANGUAGE: German only, address readers with \"ihr\".\n\nPOST STRUCTURE (800–1300 characters including hashtags):\n1. First line is the hook: a concrete, surprising detail or number from the article. One sentence, no emoji, no clickbait like \"Das ändert alles\".\n2. One short sentence on what happened.\n3. 3–4 key facts as a list, each on its own line, starting with \"→ \".\n4. 2–3 sentences with the author's view: what this means in practice for businesses, which process it helps to automate.\n5. A question to the readers on its own line.\n6. Last line: exactly 3 hashtags separated by spaces (e.g. #KI #Automatisierung #Sprachagenten).\n\nHARD RULES:\n- Facts only from the article. Do not add numbers, names or dates of your own.\n- Do not invent experience for the author: no \"I implemented\", \"at my client\", \"in my project\". Opinions and conclusions are fine.\n- No links and no \"Link in den Kommentaren\".\n- No markdown: no **, no # headings, no lists with \"-\" or \"*\". Separate paragraphs with an empty line.\n- At most one emoji in the whole post, preferably none.\n\nRESPONSE FORMAT: valid JSON only, no wrappers:\n{\"index\": <number of the chosen article>, \"post\": \"<post text>\"}\n",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "linkedinVersion",
+              "value": "202609",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "linkedinConnectedAt",
+              "value": "2026-09-30",
+              "type": "string"
+            },
+            {
+              "id": "a4",
+              "name": "excludePostIds",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "n3",
+      "name": "Fetch blog posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "url": "={{ $(\"Settings\").first().json.siteUrl }}/wp-json/wp/v2/posts?per_page=10&_embed=wp:featuredmedia&_fields=id,link,title,content,_links,_embedded",
+        "options": {}
+      }
+    },
+    {
+      "id": "n4",
+      "name": "Select candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Pick up to 6 recent blog posts that have not been published to LinkedIn yet and build the Claude request\nconst state = $getWorkflowStaticData('global');\n// usedPostIds is only persisted on scheduled (production) runs; add manually published posts to excludePostIds in Settings\nconst manual = String($('Settings').first().json.excludePostIds || '')\n  .split(',').map(s => Number(s.trim())).filter(Boolean);\nconst used = [...(state.usedPostIds || []), ...manual];\n\nconst clean = (html) => String(html || '')\n  .replace(/<[^>]*>/g, ' ')\n  .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#8211;/g, '–').replace(/&#8222;|&#8220;/g, '\"')\n  .replace(/&#8217;/g, \"'\").replace(/&#\\d+;/g, '')\n  .replace(/\\s+/g, ' ').trim();\n\nconst candidates = $input.all()\n  .map(i => i.json)\n  .filter(p => !used.includes(p.id))\n  .filter(p => p._embedded && p._embedded['wp:featuredmedia'] && p._embedded['wp:featuredmedia'][0] && p._embedded['wp:featuredmedia'][0].source_url)\n  .slice(0, 6)\n  .map(p => ({\n    id: p.id,\n    link: p.link,\n    title: clean(p.title && p.title.rendered),\n    image: p._embedded['wp:featuredmedia'][0].source_url,\n    text: clean(p.content && p.content.rendered).slice(0, 3000),\n  }));\n\nif (candidates.length === 0) {\n  throw new Error('No new blog posts with a featured image — LinkedIn post skipped');\n}\n\nconst userMessage = candidates\n  .map((c, i) => `### Article ${i}\\nTitle: ${c.title}\\n\\n${c.text}`)\n  .join('\\n\\n');\n\nreturn [{ json: {\n  candidates,\n  claudeRequest: {\n    model: 'claude-sonnet-5',\n    max_tokens: 1500,\n    system: $('Settings').first().json.systemPrompt,\n    messages: [{ role: 'user', content: userMessage }],\n  },\n} }];\n"
+      }
+    },
+    {
+      "id": "n5",
+      "name": "Claude writes post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claudeRequest) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "id": "n6",
+      "name": "Parse response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Parse Claude's answer and convert the post to LinkedIn \"little text\" format\n// the model may return a thinking block first — take the text block\nconst raw = (($json.content || []).find(b => b.type === 'text') || {}).text || '';\nlet data;\ntry {\n  data = JSON.parse(raw.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```\\s*$/, ''));\n} catch (e) {\n  throw new Error('Claude did not return JSON: ' + raw.slice(0, 200));\n}\n\nconst candidates = $('Select candidates').first().json.candidates;\nconst article = candidates[Number(data.index)];\nif (!article) throw new Error('Claude picked a non-existent article: ' + data.index);\n\nconst post = String(data.post || '').trim();\nif (post.length < 300 || post.length > 2500) {\n  throw new Error(`Suspicious post length (${post.length} characters)`);\n}\n\n// LinkedIn little text: reserved characters must be escaped, hashtags use a template\nconst commentary = post\n  .replace(/[\\\\(){}\\[\\]<>@|~_*]/g, ch => '\\\\' + ch)\n  .replace(/#([\\p{L}\\p{N}]+)/gu, '{hashtag|\\\\#|$1}');\n\nreturn [{ json: {\n  articleId: article.id,\n  articleTitle: article.title,\n  articleLink: article.link,\n  image: article.image,\n  post,\n  commentary,\n} }];\n"
+      }
+    },
+    {
+      "id": "n7",
+      "name": "Get LinkedIn member ID",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "url": "https://api.linkedin.com/v2/userinfo",
+        "options": {},
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "linkedInOAuth2Api"
+      },
+      "credentials": {
+        "linkedInOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "LinkedIn account"
+        }
+      }
+    },
+    {
+      "id": "n8",
+      "name": "Init image upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.linkedin.com/rest/images?action=initializeUpload",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ initializeUploadRequest: { owner: \"urn:li:person:\" + $json.sub } }) }}",
+        "options": {},
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "linkedInOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "LinkedIn-Version",
+              "value": "={{ $(\"Settings\").first().json.linkedinVersion }}"
+            },
+            {
+              "name": "X-Restli-Protocol-Version",
+              "value": "2.0.0"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "linkedInOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "LinkedIn account"
+        }
+      }
+    },
+    {
+      "id": "n9",
+      "name": "Download featured image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "url": "={{ $(\"Parse response\").first().json.image }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "n10",
+      "name": "Upload image to LinkedIn",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $(\"Init image upload\").first().json.value.uploadUrl }}",
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {},
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "linkedInOAuth2Api"
+      },
+      "credentials": {
+        "linkedInOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "LinkedIn account"
+        }
+      }
+    },
+    {
+      "id": "n11",
+      "name": "Build post body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Request body for the LinkedIn Posts API\nconst p = $('Parse response').first().json;\nconst author = 'urn:li:person:' + $('Get LinkedIn member ID').first().json.sub;\nreturn [{ json: {\n  author,\n  postBody: {\n    author,\n    commentary: p.commentary,\n    visibility: 'PUBLIC',\n    distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },\n    content: { media: { title: p.articleTitle, id: $('Init image upload').first().json.value.image } },\n    lifecycleState: 'PUBLISHED',\n    isReshareDisabledByAuthor: false,\n  },\n} }];\n"
+      }
+    },
+    {
+      "id": "n12",
+      "name": "Publish post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.linkedin.com/rest/posts",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.postBody) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "linkedInOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "LinkedIn-Version",
+              "value": "={{ $(\"Settings\").first().json.linkedinVersion }}"
+            },
+            {
+              "name": "X-Restli-Protocol-Version",
+              "value": "2.0.0"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "linkedInOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "LinkedIn account"
+        }
+      }
+    },
+    {
+      "id": "n13",
+      "name": "Remember article",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Post is live: remember the article so it is never published twice\nconst p = $('Parse response').first().json;\nconst state = $getWorkflowStaticData('global');\nstate.usedPostIds = [p.articleId, ...(state.usedPostIds || [])].slice(0, 200);\n\nconst urn = ($json.headers && ($json.headers['x-restli-id'] || $json.headers['X-RestLi-Id'])) || '';\nreturn [{ json: { urn } }];\n"
+      }
+    },
+    {
+      "id": "n15",
+      "name": "Build report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Telegram report + reminder to renew LinkedIn access (token lives 60 days)\nconst p = $('Parse response').first().json;\nconst urn = $json.urn;\nconst s = $('Settings').first().json;\n\nconst days = Math.floor((Date.now() - new Date(s.linkedinConnectedAt).getTime()) / 86400000);\nconst left = 60 - days;\n\nlet text = `✅ LinkedIn-Post veröffentlicht\\n\\n„${p.articleTitle}\"\\n` +\n  (urn ? `https://www.linkedin.com/feed/update/${urn}/` : '');\n\nif (left <= 10) {\n  text += `\\n\\n🔑 Der LinkedIn-Zugang läuft in ~${Math.max(left, 0)} Tagen ab. ` +\n    'n8n → Credentials → LinkedIn → Reconnect, danach linkedinConnectedAt im Node „Settings\" auf das heutige Datum setzen.';\n}\nreturn [{ json: { text } }];\n"
+      }
+    },
+    {
+      "id": "n16",
+      "name": "Telegram report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3080,
+        0
+      ],
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Tue/Thu 9:00": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Fetch blog posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch blog posts": {
+      "main": [
+        [
+          {
+            "node": "Select candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select candidates": {
+      "main": [
+        [
+          {
+            "node": "Claude writes post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude writes post": {
+      "main": [
+        [
+          {
+            "node": "Parse response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse response": {
+      "main": [
+        [
+          {
+            "node": "Get LinkedIn member ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get LinkedIn member ID": {
+      "main": [
+        [
+          {
+            "node": "Init image upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init image upload": {
+      "main": [
+        [
+          {
+            "node": "Download featured image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download featured image": {
+      "main": [
+        [
+          {
+            "node": "Upload image to LinkedIn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload image to LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "Build post body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build post body": {
+      "main": [
+        [
+          {
+            "node": "Publish post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish post": {
+      "main": [
+        [
+          {
+            "node": "Remember article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remember article": {
+      "main": [
+        [
+          {
+            "node": "Build report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build report": {
+      "main": [
+        [
+          {
+            "node": "Telegram report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
