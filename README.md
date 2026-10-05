@@ -1,5 +1,7 @@
 # LinkedIn-Autopost aus dem eigenen Blog (n8n + Claude)
 
+[![ci](https://github.com/nikita-automation/linkedin-autopost-n8n/actions/workflows/ci.yml/badge.svg)](https://github.com/nikita-automation/linkedin-autopost-n8n/actions/workflows/ci.yml)
+
 Ein n8n-Workflow, der zweimal pro Woche automatisch einen LinkedIn-Post im persönlichen Profil veröffentlicht – geschrieben von Claude auf Basis der neuesten Artikel aus einem WordPress-Blog, mit dem Beitragsbild des Artikels.
 
 Läuft produktiv seit September 2026 für [nikita-automation.de](https://nikita-automation.de). Die Geschichte dahinter: [Wie ich meinen LinkedIn-Auftritt automatisiert habe](https://nikita-automation.de/2026/09/30/linkedin-auftritt-automatisiert/).
@@ -90,7 +92,10 @@ Ein Post kostet mit Claude Sonnet etwa 3–4 Cent (rund 10.000 Input- und 700 Ou
 workflow/linkedin-autopost.json   n8n-Workflow zum Import
 prompt/system-prompt.txt          Prompt für Claude
 src/*.js                          Code der Code-Nodes (zum Lesen, ist im Workflow enthalten)
+scripts/check_consistency.py      CI-Prüfung: src/ und Workflow identisch, keine echten Credentials
 ```
+
+Die CI (GitHub Actions) stellt bei jedem Push sicher, dass der Code in `src/` mit dem Code im exportierten Workflow übereinstimmt, dass nur `REPLACE_ME`-Platzhalter statt echter Credential-IDs drinstehen und dass keine Telefonnummer, kein Token und kein API-Key im Repository liegt.
 
 ## Lizenz
 
